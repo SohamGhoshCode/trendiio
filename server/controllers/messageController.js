@@ -1,39 +1,47 @@
-import fs from 'fs'
 import imagekit from '../configs/imagekit.js';
 import Message from '../models/Message.js';
+import { WebSocketServer, WebSocket } from 'ws';
 
+// Map of userId → WebSocket connection
+const clients = new Map();
 
-//Create an empty object to store SS Event Connections
-const connections = {};
+// Initialize the WebSocket server (attached to HTTP server in server.js)
+export const wss = new WebSocketServer({ noServer: true });
 
-//Controller function for the SSE endpoint
-export const sseController = (req, res)=>{
-    const { userId } = req.params
-    
+wss.on('connection', (ws, userId) => {
+    // Store the client connection keyed by userId
+    clients.set(userId, ws);
+    console.log(`WebSocket connected: ${userId}`);
 
-    //Set SSE headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    const origin = req.headers.origin || 'https://trendiio.vercel.app'
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    // Send confirmation to the client
+    ws.send(JSON.stringify({ event: 'connected', message: 'WebSocket connected' }));
 
-    //Add the client's respose object to the connections object
-    connections[userId] = res
+    // Remove client when they disconnect
+    ws.on('close', () => {
+        clients.delete(userId);
+        console.log(`WebSocket disconnected: ${userId}`);
+    });
 
-    //Send an initial event to the client
-    res.write(`event: connected\ndata: Connected to SSE stream\n\n`)
+    ws.on('error', (err) => {
+        console.error(`WebSocket error for ${userId}:`, err.message);
+        clients.delete(userId);
+    });
+});
 
+// Upgrade handler — call this from server.js on the 'upgrade' event
+export const handleUpgrade = (req, socket, head) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const userId = url.searchParams.get('userId');
 
-    //Handle client disconnection
-    req.on('close',()=>{
-        //Remove the client's response object from the connections array
-        delete connections[userId]
-        console.log('Client disconnected')
-    })
+    if (!userId) {
+        socket.destroy();
+        return;
+    }
 
-}
+    wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, userId);
+    });
+};
 
 //Send Message
 export const sendMessage = async (req, res) => {
@@ -77,10 +85,10 @@ export const sendMessage = async (req, res) => {
       .findById(message._id)
       .populate('from_user_id to_user_id')
 
-    if (connections[to_user_id]) {
-      connections[to_user_id].write(
-        `data: ${JSON.stringify(messageWithUserData)}\n\n`
-      )
+    // Push message in real-time if the recipient is connected via WebSocket
+    const recipientWs = clients.get(to_user_id);
+    if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
+      recipientWs.send(JSON.stringify(messageWithUserData));
     }
 
     return res.status(201).json({

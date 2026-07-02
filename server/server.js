@@ -1,6 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import 'dotenv/config'
+import http from 'http'
 import connectDB from './configs/db.js';
 import {inngest, functions} from './inngest/index.js'
 import {serve} from 'inngest/express'
@@ -9,6 +10,7 @@ import userRouter from './routes/userRoutes.js';
 import postRouter from './routes/postRoutes.js';
 import storyRouter from './routes/storyRoutes.js';
 import messageRouter from './routes/messageRoutes.js';
+import { handleUpgrade } from './controllers/messageController.js';
 
 const app = express();
 
@@ -28,12 +30,14 @@ app.use('/api/post', postRouter)
 app.use('/api/story', storyRouter)
 app.use('/api/message', messageRouter)
 
-
-
-
-
 const PORT = process.env.PORT || 4000
 
-app.listen(PORT, ()=>{
+// Create HTTP server from Express app so we can handle WebSocket upgrades
+const server = http.createServer(app);
+
+// Route WebSocket upgrade requests to our WebSocket handler
+server.on('upgrade', handleUpgrade);
+
+server.listen(PORT, ()=>{
     console.log(`Server ${PORT} pe chal rha h`)
 })
